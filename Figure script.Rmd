@@ -1,0 +1,122 @@
+---
+title: "Figure script"
+author: "Kate Schneider"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load libraries
+library(tidyverse)
+library(haven)
+library(readxl)
+```
+
+Part 1: Data Management
+```{r}
+data <- haven::read_dta("AFS_Data_gender_newmethod.dta")
+names(data)
+
+# Replace NAs with 0s
+data[is.na(data)] <- 0
+
+# Bring in the continent info
+M49 <- readxl::read_excel("UNSD — M49 codes.xlsx")
+names(M49)
+M49 <- M49 %>% rename(country = "Country or Area")
+
+data <- left_join(data, M49, by = "country")
+
+# Create a world value
+world_total <- data %>%
+  group_by(yr) %>%
+  summarise(across(c(4:18), sum))
+names(world_total)
+
+  # Create shares
+  world_total <- world_total %>%
+    mutate(AFS_F = agr_F + fsy_F + frel_F,
+           AFS_M = agr_M + fsy_M + frel_M,
+           AFS_share_F = (AFS_F / total_emp_F)*100,
+           AFS_share_M = (AFS_M / total_emp_M)*100) %>%
+  mutate(off_farm_F = fsy_F + frel_F,
+         off_farm_M = fsy_M + frel_M) %>%
+  rename(on_farm_F = agr_F,
+         on_farm_M = agr_M)
+
+# Now aggregate to sub-region
+data <- data %>%
+  select(1:19,24,26,28) %>%
+  group_by(yr, `Region Name`, `Sub-region Name`, `Intermediate Region Name`) %>%
+  summarise(across(c(4:18), sum))
+names(data)
+
+# Create shares
+data <- data %>%
+  mutate(AFS_F = agr_F + fsy_F + frel_F,
+         AFS_M = agr_M + fsy_M + frel_M,
+         AFS_share_F = (AFS_F / total_emp_F)*100,
+         AFS_share_M = (AFS_M / total_emp_M)*100) %>%
+  mutate(off_farm_F = fsy_F + frel_F,
+         off_farm_M = fsy_M + frel_M) %>%
+  rename(on_farm_F = agr_F,
+         on_farm_M = agr_M)
+
+# Keep only Africa and world
+Africa <- data %>%
+  filter(`Region Name` == "Africa")
+names(Africa)
+
+# Add in the world as a row
+world_total <- world_total %>%
+  mutate("Region Name" = "World",
+         "Sub-region Name" = "World",
+         "Intermediate Region Name" = "World")
+names(world_total)
+world_total <- world_total %>%
+  relocate(c("Region Name", "Sub-region Name", "Intermediate Region Name"), .after= yr)
+data2 <- rbind(Africa, world_total)
+rm(M49, world_total, data, Africa)
+```
+
+Part 2: Visualization
+```{r}
+# Reshape the data long
+plotdata <- data2 %>%
+  select(c(1:4,5,8,9,10,13,14,24,25)) %>%
+  mutate(OnFarm_F = (on_farm_F / total_emp_F)*100,
+         OffFarm_F = (off_farm_F / total_emp_F)*100,
+         NonAFS_F = (other_F / total_emp_F)*100,
+         OnFarm_M = (on_farm_M / total_emp_M)*100,
+         OffFarm_M = (off_farm_M / total_emp_M)*100,
+         NonAFS_M = (other_M / total_emp_M)*100) %>%
+  select(-c(5:12)) 
+
+plotdata <- plotdata %>%
+  group_by(`Intermediate Region Name`, yr, `Region Name`, `Sub-region Name`) %>%
+  pivot_longer(5:10, names_to = c("Sector", "Sex"), names_sep = "_",
+               values_to = "Employment share") %>%
+  mutate(`Intermediate Region Name` = case_when(is.na(`Intermediate Region Name`) ~ `Sub-region Name`, 
+                                                TRUE ~ `Intermediate Region Name`),
+         `Sub-region Name` = case_when(is.na(`Sub-region Name`) ~ `Region Name`,
+                                       TRUE ~ `Sub-region Name`)) %>%
+  rename(Region = `Intermediate Region Name`) %>%
+  ungroup() %>%
+  select(-c(2:3))
+
+png("AFS Employ.png", width = 10, height = 7.5, unit = "in", res = 300)
+plotdata %>%
+  filter(yr >=2000) %>%
+  rename(Year = yr) %>%
+  mutate(Sex = case_when(Sex == "F" ~ "Female", 
+                         Sex == "M" ~ "Male", 
+                         TRUE ~ Sex)) %>%
+  ggplot(aes(fill=Sector, y=`Employment share`, x = Year)) + 
+    geom_area() + 
+    facet_grid(Sex ~ Region) +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+dev.off()
+
+```
